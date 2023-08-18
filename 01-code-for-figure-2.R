@@ -20,7 +20,7 @@ cop_mat <- matrix(c_param, nrow = length(medians), ncol = length(medians)) + (1 
 
 ## simulate 10000 observations from Gaussian copula
 n_sim = 10000
-set.seed(2029)
+set.seed(2025)
 obs <- pnorm(mvrnorm(n = n_sim, mu = rep(0, length(medians)), Sigma = cop_mat))
 
 ## convert to 10000 observations from the joint prior on Z1 and Z2
@@ -85,10 +85,6 @@ for (k in 1:length(samps)){
   inds <- sample(seq(1,1000000,1), 10000, prob = w, replace = TRUE)
   
   ## obtain the posterior draws on the Z-scale
-  # p1s_post <- p1s[inds]
-  # p2s_post <- p2s[inds]
-  # p3s_post <- p3s[inds]
-  
   z1_post <- z1s[inds]
   z2_post <- z2s[inds]
   ## output the posterior correlation in terms of Kendall's tau
@@ -115,7 +111,7 @@ plot1 <- ggplot(dat_prior, aes(x=u1, y=u2)) + theme_bw() +
 dat_10 <- data.frame(u1 = (rank(z1_post10)-0.5)/10000, u2 = (rank(z2_post10)-0.5)/10000)
 plot2 <- ggplot(dat_10, aes(x=u1, y=u2)) + theme_bw() +
   geom_point(size=2, alpha = 0.12) +
-  labs(title = bquote("Posterior:"~italic(n)~"="~10^1*","~tau~"="~-0.676)) +
+  labs(title = bquote("Posterior:"~italic(n)~"="~10^1*","~tau~"="~-0.683)) +
   labs(x=bquote('\n'~"F"[1]*"("*italic(Z)[1]*")"), y=bquote("F"[2]*"("*italic(Z)[2]*")"~'\n')) +
   theme(plot.title = element_text(hjust = 0.5,size=16,margin=unit(c(0,0,5,0), "mm"))) +
   theme(plot.subtitle = element_text(hjust = 0.5,size=16)) +
@@ -126,7 +122,7 @@ plot2 <- ggplot(dat_10, aes(x=u1, y=u2)) + theme_bw() +
 dat_100 <- data.frame(u1 = (rank(z1_post100)-0.5)/10000, u2 = (rank(z2_post100)-0.5)/10000)
 plot3 <- ggplot(dat_100, aes(x=u1, y=u2)) + theme_bw() +
   geom_point(size=2, alpha = 0.12) +
-  labs(title = bquote("Posterior:"~italic(n)~"="~10^2*","~tau~"="~-0.497)) +
+  labs(title = bquote("Posterior:"~italic(n)~"="~10^2*","~tau~"="~-0.501)) +
   labs(x=bquote('\n'~"F"[1]*"("*italic(Z)[1]*")"), y=bquote("F"[2]*"("*italic(Z)[2]*")"~'\n')) +
   theme(plot.title = element_text(hjust = 0.5,size=16,margin=unit(c(0,0,5,0), "mm"))) +
   theme(plot.subtitle = element_text(hjust = 0.5,size=16)) +
@@ -137,7 +133,7 @@ plot3 <- ggplot(dat_100, aes(x=u1, y=u2)) + theme_bw() +
 dat_1000 <- data.frame(u1 = (rank(z1_post1000)-0.5)/10000, u2 = (rank(z2_post1000)-0.5)/10000)
 plot4 <- ggplot(dat_1000, aes(x=u1, y=u2)) + theme_bw() +
   geom_point(size=2, alpha = 0.12) +
-  labs(title = bquote("Posterior:"~italic(n)~"="~10^3*","~tau~"="~-0.164)) +
+  labs(title = bquote("Posterior:"~italic(n)~"="~10^3*","~tau~"="~-0.168)) +
   labs(x=bquote('\n'~"F"[1]*"("*italic(Z)[1]*")"), y=bquote("F"[2]*"("*italic(Z)[2]*")"~'\n')) +
   theme(plot.title = element_text(hjust = 0.5,size=16,margin=unit(c(0,0,5,0), "mm"))) +
   theme(plot.subtitle = element_text(hjust = 0.5,size=16)) +
@@ -148,7 +144,7 @@ plot4 <- ggplot(dat_1000, aes(x=u1, y=u2)) + theme_bw() +
 dat_10000 <- data.frame(u1 = (rank(z1_post10000)-0.5)/10000, u2 = (rank(z2_post10000)-0.5)/10000)
 plot5 <- ggplot(dat_10000, aes(x=u1, y=u2)) + theme_bw() +
   geom_point(size=2, alpha = 0.12) +
-  labs(title = bquote("Posterior:"~italic(n)~"="~10^4*","~tau~"="~-0.023)) +
+  labs(title = bquote("Posterior:"~italic(n)~"="~10^4*","~tau~"="~-0.018)) +
   labs(x=bquote('\n'~"F"[1]*"("*italic(Z)[1]*")"), y=bquote("F"[2]*"("*italic(Z)[2]*")"~'\n')) +
   theme(plot.title = element_text(hjust = 0.5,size=16,margin=unit(c(0,0,5,0), "mm"))) +
   theme(plot.subtitle = element_text(hjust = 0.5,size=16)) +
