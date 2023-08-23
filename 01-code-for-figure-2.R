@@ -18,8 +18,8 @@ betas <- c(30,30)
 c_param <- -0.9
 cop_mat <- matrix(c_param, nrow = length(medians), ncol = length(medians)) + (1 - c_param)*diag(length(medians))
 
-## simulate 10000 observations from Gaussian copula
-n_sim = 10000
+## simulate 100000 observations from Gaussian copula
+n_sim = 100000
 set.seed(2025)
 obs <- pnorm(mvrnorm(n = n_sim, mu = rep(0, length(medians)), Sigma = cop_mat))
 
@@ -34,35 +34,38 @@ p3_sim <- (1-z2_sim)*(1-z1_sim)
 
 ## simulate 10000 observations according to these prior draws for the multinomial probabilities
 set.seed(2)
-dat <- NULL
+dat <- matrix(0, nrow = 100000, ncol= 3)
 for (i in 1:length(p1_sim)){
-  dat <- rbind(dat, as.numeric(rmultinom(1, 1, cbind(p1_sim[i], p2_sim[i], p3_sim[i]))))
+  dat[i,] <- as.numeric(rmultinom(1, 1, cbind(p1_sim[i], p2_sim[i], p3_sim[i])))
 }
 
 ## store the data to make the figures at different sample sizes
 dat_store <- dat
 
-## using sampling-importance-resampling (Rubin, 1987) to get posterior draws at
-## various sample sizes; the proposal distribution consists of the two marginal priors
-## joined by the independence copula
-set.seed(3)
-n_sim2 = 1000000
-u1s <- runif(n_sim2); u2s <- runif(n_sim2)
-z1s <- qbeta(u1s,alphas[1], betas[1])
-z2s <- qbeta(u2s,alphas[2], betas[2])
-
-## convert draws from proposal distribution to the p-scale (easier for computation)
-p1s <- z1s
-p2s <- z2s*(1-z1s)
-p3s <- (1 - z2s)*(1-z1s)
-
 ## define normal copula used for the resampling weights
 norm.cop <- normalCopula(c(-0.9), dim = 2, dispstr = "un")
 
-samps <- c(10, 100, 1000, 10000)
+## define parameters for simulation
+n_sim2 = 1000000
+samps <- c(10, 100, 1000, 10000, 100000)
+set.seed(5)
 for (k in 1:length(samps)){
   ## take the appropriate number of observations
   dat <- colSums(dat_store[1:samps[k],])
+  
+  ## using sampling-importance-resampling (Rubin, 1987) to get posterior draws at
+  ## various sample sizes; the proposal distribution consists of the posterior if
+  ## the marginal priors were joined with an independence copula
+  v1s <- runif(n_sim2); v2s <- runif(n_sim2)
+  z1s <- qbeta(v1s, dat[1] + alphas[1], dat[2] + dat[3] + betas[1])
+  z2s <- qbeta(v2s, dat[2] + alphas[2], dat[3] + betas[2])
+  u1s <- pbeta(z1s,alphas[1], betas[1])
+  u2s <- pbeta(z2s,alphas[2], betas[2])
+  
+  ## convert draws from proposal distribution to the p-scale (easier for computation)
+  p1s <- z1s
+  p2s <- z2s*(1-z1s)
+  p3s <- (1 - z2s)*(1-z1s)
   
   ## compute the numerator for the resampling weights (according to an expression that is
   ## proportional to the log-posterior) on the log-scale
@@ -72,7 +75,7 @@ for (k in 1:length(samps)){
   
   ## compute the denominator of the resampling weights (according to the proposal distribution)
   ## on the log-scale
-  den_w <- dbeta(z1s, alphas[1], betas[1], log = TRUE) + dbeta(z2s, alphas[2], betas[2], log = TRUE)
+  den_w <- dbeta(z1s, dat[1] + alphas[1], dat[2] + dat[3] + betas[1], log = TRUE) + dbeta(z2s, dat[2] + alphas[2], dat[3] + betas[2], log = TRUE)
   
   ## compute resampling weights on the log-scale and exponentiate such that the weights sum to 1
   w <- num_w - den_w
@@ -81,7 +84,6 @@ for (k in 1:length(samps)){
   w <- w/sum(w)
   
   ## conduct the resampling
-  set.seed(k + 3)
   inds <- sample(seq(1,1000000,1), 10000, prob = w, replace = TRUE)
   
   ## obtain the posterior draws on the Z-scale
@@ -95,8 +97,8 @@ for (k in 1:length(samps)){
   assign(paste0("z2_post", samps[k]), z2_post)
 }
 
-## estimate copula for prior using ranks
-dat_prior <- data.frame(u1 = (rank(z1_sim)-0.5)/10000, u2 = (rank(z2_sim)-0.5)/10000)
+## estimate copula for prior using ranks; just use first 10000 points from prior copula
+dat_prior <- data.frame(u1 = (rank(head(z1_sim,10000))-0.5)/10000, u2 = (rank(head(z2_sim,10000))-0.5)/10000)
 plot1 <- ggplot(dat_prior, aes(x=u1, y=u2)) + theme_bw() +
   geom_point(size=2, alpha = 0.12) +
   labs(title = bquote("Prior:"~tau~"="~-0.713)) +
@@ -111,7 +113,7 @@ plot1 <- ggplot(dat_prior, aes(x=u1, y=u2)) + theme_bw() +
 dat_10 <- data.frame(u1 = (rank(z1_post10)-0.5)/10000, u2 = (rank(z2_post10)-0.5)/10000)
 plot2 <- ggplot(dat_10, aes(x=u1, y=u2)) + theme_bw() +
   geom_point(size=2, alpha = 0.12) +
-  labs(title = bquote("Posterior:"~italic(n)~"="~10^1*","~tau~"="~-0.683)) +
+  labs(title = bquote("Posterior:"~italic(n)~"="~10^1*","~tau~"="~-0.679)) +
   labs(x=bquote('\n'~"F"[1]*"("*italic(Z)[1]*")"), y=bquote("F"[2]*"("*italic(Z)[2]*")"~'\n')) +
   theme(plot.title = element_text(hjust = 0.5,size=16,margin=unit(c(0,0,5,0), "mm"))) +
   theme(plot.subtitle = element_text(hjust = 0.5,size=16)) +
@@ -152,6 +154,17 @@ plot5 <- ggplot(dat_10000, aes(x=u1, y=u2)) + theme_bw() +
         axis.title.x=element_text(size=16, margin=unit(c(3,0,0,0), "mm")),
         axis.title.y=element_text(size = 16, margin=unit(c(0,3,0,0), "mm")))
 
+dat_100000 <- data.frame(u1 = (rank(get("z1_post1e+05"))-0.5)/10000, u2 = (rank(get("z2_post1e+05"))-0.5)/10000)
+plot6 <- ggplot(dat_100000, aes(x=u1, y=u2)) + theme_bw() +
+  geom_point(size=2, alpha = 0.12) +
+  labs(title = bquote("Posterior:"~italic(n)~"="~10^5*","~tau~"="~-0.018)) +
+  labs(x=bquote('\n'~"F"[1]*"("*italic(Z)[1]*")"), y=bquote("F"[2]*"("*italic(Z)[2]*")"~'\n')) +
+  theme(plot.title = element_text(hjust = 0.5,size=16,margin=unit(c(0,0,5,0), "mm"))) +
+  theme(plot.subtitle = element_text(hjust = 0.5,size=16)) +
+  theme(axis.text=element_text(size=14),
+        axis.title.x=element_text(size=16, margin=unit(c(3,0,0,0), "mm")),
+        axis.title.y=element_text(size = 16, margin=unit(c(0,3,0,0), "mm")))
+
 ## combine subplots into grid of two rows
 fig.row1 <- plot_grid(plot1 + theme(plot.margin=unit(c(0.45,0.45,0.45,0.45),"cm")), 
                       plot2 + theme(plot.margin=unit(c(0.45,0.45,0.45,0.45),"cm")),
@@ -159,11 +172,11 @@ fig.row1 <- plot_grid(plot1 + theme(plot.margin=unit(c(0.45,0.45,0.45,0.45),"cm"
                       rel_widths = c(1, 1,1), ncol = 3)
 fig.row2 <- plot_grid(plot4 + theme(plot.margin=unit(c(0.45,0.45,0.45,0.45),"cm")), 
                       plot5 + theme(plot.margin=unit(c(0.45,0.45,0.45,0.45),"cm")),
-                      NULL,
+                      plot6 + theme(plot.margin=unit(c(0.45,0.45,0.45,0.45),"cm")),
                       rel_widths = c(1, 1,1), ncol = 3)
 fig <- plot_grid(fig.row1, fig.row2, nrow = 2)
 
-pdf(file = "Fig2_PR.pdf",   # The directory you want to save the file in
+pdf(file = "Fig2_PR3.pdf",   # The directory you want to save the file in
     width = 12, # The width of the plot in inches (12.41)
     height = 8) # The height of the plot in inches (10.7)
 
