@@ -1,4 +1,4 @@
-## code to reproduce Figure 4 in the main text
+## code to reproduce Figure 5 and Table 2 in the main text
 
 ## load required R packages
 require(foreach)
@@ -163,7 +163,7 @@ for (i in 1:length(q1)){
   }
 }
 
-## plots for Figure 4
+## plots for Figure 5
 
 ## start with scenario 1 and define scale for right vertical axis
 df1 <- read.csv("reg_modes_1.csv")
@@ -359,12 +359,181 @@ col2 <- plot_grid(plot2 + theme(legend.position="none") + theme(plot.margin=unit
                   plot6 + theme(plot.margin=unit(c(0.25,0.4,0.25,0.75),"cm")),
                   nrow = 3, rel_widths = c(1,1,1))
 
-fig4 <- plot_grid(col1, col2, ncol = 2, rel_heights = c(1,1))
+fig5 <- plot_grid(col1, col2, ncol = 2, rel_heights = c(1,1))
 
-pdf(file = "Fig4_PR.pdf",   # The directory you want to save the file in
+pdf(file = "Fig5_PR.pdf",   # The directory you want to save the file in
     width = 12.5, # The width of the plot in inches (12.41)
     height = 10) # The height of the plot in inches (10.7)
 
-fig4
+fig5
 
 dev.off()
+
+## implement similar process for Table 2
+
+## only use a subset of sample sizes this time
+samps <- c(10, 100, 1000, 10000, 100000)
+
+## settings for sampling-resampling
+gener <- 100000
+retain <- 10000
+
+## nominal coverage of HPD set
+prob <- 0.95
+## repeat for each of the six scenarios
+for (i in 1:length(q1)){
+  for (j in 1:length(samps)){
+    ## repeat process 10000 times in parallel for each sample size and scenario combination
+    set.seed(10000*j, kind = "L'Ecuyer-CMRG")
+    res_temp <- foreach(k=1:m, .packages=c('nleqslv', 'MASS', 'mvtnorm', 'copula'), .combine=rbind,
+                        .options.snow=opts) %dopar% {
+                          ## simulate covariates x1 and x2
+                          temp = mvrnorm(n=samps[j], mu = c(0,0), Sigma = rbind(c(1, 0), c(0,1)))
+                          df = data.frame(x1 = temp[,1], x2 = temp[,2])
+                          
+                          ## simulate response y and create data frame
+                          y = q1[i]*df$x1 + q2[i]*df$x2 + rnorm(samps[j],0, sqrt(5))
+                          dat_temp = cbind(df, y)
+                          
+                          ## compute the posterior mode with each copula for the same sample
+                          modet <- nleqslv(c(q1[i], q2[i]), fn, cop = TRUE, dat = dat_temp)$x
+                          modeind <- nleqslv(c(q1[i], q2[i]), fn, cop = FALSE, dat = dat_temp)$x
+                          
+                          ## double the variance for proposal distribution
+                          var_mat <- 10*solve(t(as.matrix(df))%*%as.matrix(df))
+                          
+                          ## first get proposal sample for t-copula
+                          samp_t <- mvrnorm(gener, mu = modet, Sigma = var_mat)
+                          
+                          t.cop <- tCopula(rep(0), dim =2, df = 4, dispstr = "un")
+                          
+                          ## get CDF values for copula density (since the t-copula is symmetric,
+                          ## we take the lower tail to mitigate round-off error)
+                          u1s <- pnorm(-1*abs(samp_t[,1]))
+                          u2s <- pnorm(-1*abs(samp_t[,2]))
+                          
+                          ## get the sum over data (needed for the likelihood component of posterior)
+                          yy <- sum(y^2)
+                          yx1 <- sum(y*df$x1)
+                          yx2 <- sum(y*df$x2)
+                          x1x2 <- sum(df$x1*df$x2)
+                          x1x1 <- sum(df$x1^2)
+                          x2x2 <- sum(df$x2^2)
+                          
+                          ## compute the numerator for the resampling weights (according to an expression that is
+                          ## proportional to the log-posterior) on the log-scale
+                          num_w <- -1/(2*5)*(yy - 2*samp_t[,1]*yx1 - 2*samp_t[,2]*yx2 + 2*samp_t[,1]*samp_t[,2]*x1x2 +
+                                               (samp_t[,1])^2*x1x1 + (samp_t[,2])^2*x2x2) +
+                            dCopula(cbind(u1s, u2s), t.cop, log = TRUE) +
+                            dnorm(samp_t[,1], log = TRUE) + dnorm(samp_t[,2], log = TRUE) 
+                          
+                          ## compute the denominator of the resampling weights (according to the proposal distribution)
+                          ## on the log-scale
+                          den_w <- dmvnorm(samp_t, mean = modet, sigma = var_mat, log = TRUE)
+                          
+                          ## compute resampling weights on the log-scale and exponentiate such that the weights sum to 1
+                          w <- num_w - den_w
+                          w <- w - max(w)
+                          w <- exp(w - max(w))
+                          w <- w/sum(w)
+                          
+                          ## conduct the resampling
+                          inds <- sample(seq(1,gener,1), retain, prob = w, replace = TRUE)
+                          
+                          ## obtain the posterior draws
+                          b1_post <- samp_t[inds, 1]
+                          b2_post <- samp_t[inds, 2]
+                          
+                          ## helper function that determines whether the fixed parameter value is
+                          ## in the HPD set
+                          HDIbivar <- function (x, vars = 1:2, h, n = 50, lump = TRUE, prob = 0.95, 
+                                                xlab = NULL, ylab = NULL, lims = NULL, pt) 
+                          {
+                            parnames <- colnames(x)
+                            var1 <- x[, vars[1]]
+                            var2 <- x[, vars[2]]
+                            lims <- c(range(var1), range(var2))
+                            post1 <- kde2d(var1, var2, n = n, h = h, lims = lims)
+                            dx <- diff(post1$x[1:2])
+                            dy <- diff(post1$y[1:2])
+                            sz <- sort(post1$z)
+                            c1 <- cumsum(sz) * dx * dy
+                            levels <- sapply(prob, function(x) {
+                              approx(c1, sz, xout = 1 - x)$y
+                            })
+                            post_pt <- as.numeric(kde2d(var1, var2, n = n, h = h, lims = c(pt[1], pt[1], pt[2], pt[2]))$z)
+                            ifelse(post_pt >= levels, 1, 0)
+                          }
+                          
+                          ## return binary indicator for coverage and the posterior correlation between beta1 and beta2
+                          cover <- HDIbivar(data.frame(b1 = b1_post, b2 = b2_post), n = 60, prob = prob, pt = c(q1[i], q2[i]))[[1]]
+                          res_t <- c(cover, cor(b1_post, b2_post, method = "kendall"))
+                          
+                          ## first get proposal sample for independence copula
+                          samp_t <- mvrnorm(gener, mu = modeind, Sigma = var_mat)
+                          
+                          ## get CDF values for copula density
+                          u1s <- pnorm(-1*abs(samp_t[,1]))
+                          u2s <- pnorm(-1*abs(samp_t[,2]))
+                          
+                          ## compute the numerator for the resampling weights (according to an expression that is
+                          ## proportional to the log-posterior) on the log-scale
+                          num_w <- -1/(2*5)*(yy - 2*samp_t[,1]*yx1 - 2*samp_t[,2]*yx2 + 2*samp_t[,1]*samp_t[,2]*x1x2 +
+                                               (samp_t[,1])^2*x1x1 + (samp_t[,2])^2*x2x2) +
+                            dnorm(samp_t[,1], log = TRUE) + dnorm(samp_t[,2], log = TRUE) 
+                          
+                          ## compute the denominator of the resampling weights (according to the proposal distribution)
+                          ## on the log-scale
+                          den_w <- dmvnorm(samp_t, mean = modeind, sigma = var_mat, log = TRUE)
+                          
+                          ## compute resampling weights on the log-scale and exponentiate such that the weights sum to 1
+                          w <- num_w - den_w
+                          w <- w - max(w)
+                          w <- exp(w - max(w))
+                          w <- w/sum(w)
+                          
+                          ## conduct the resampling
+                          inds <- sample(seq(1,gener,1), retain, prob = w, replace = TRUE)
+                          
+                          ## obtain the posterior draws
+                          b1_post <- samp_t[inds, 1]
+                          b2_post <- samp_t[inds, 2]
+                          
+                          ## get coverage and correlation for independence copula
+                          cover <- HDIbivar(data.frame(b1 = b1_post, b2 = b2_post), n = 60, prob = prob, pt = c(q1[i], q2[i]))[[1]]
+                          res_ind <- c(cover, cor(b1_post, b2_post, method = "kendall"))
+                          
+                          ## coverage and correlation results for both copulas
+                          c(res_t, res_ind)
+                        }
+    
+    ## output the results to a .csv file for each scenario
+    write.csv(res_temp, paste0("coverage_", i,"_samps_", samps[j], ".csv"), row.names = FALSE)
+  }
+}
+
+## process .csv files to get part of table for t-copula
+res <- NULL
+for (i in 1:6){
+  res_temp <- NULL
+  for (j in 1:length(samps)){
+    tt <- read.csv(paste0("coverage_", i,"_samps_", samps[j], ".csv"))[,1]
+    res_temp <- c(res_temp, round(mean(tt),4))
+  }
+  res <- cbind(res, res_temp)
+}
+
+write.csv(res, "summary_t_cov.csv", row.names = FALSE)
+
+## process .csv files to get part of table for independence copula
+res <- NULL
+for (i in 1:6){
+  res_temp <- NULL
+  for (j in 1:length(samps)){
+    tt <- read.csv(paste0("coverage_", i,"_samps_", samps[j], ".csv"))[,1]
+    res_temp <- c(res_temp, round(mean(tt),4))
+  }
+  res <- cbind(res, res_temp)
+}
+
+write.csv(res, "summary_ind_cov.csv", row.names = FALSE)
