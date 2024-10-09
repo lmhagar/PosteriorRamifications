@@ -10,6 +10,10 @@ require(ggplot2)
 require(ggpubr)
 require(cowplot)
 require(scales)
+require(qrng)
+require(FNN)
+require(mvtnorm)
+require(copula)
 
 ## set up parallelization for m = 10000 repetitions per
 ## sample size and scenario combination
@@ -378,14 +382,14 @@ samps <- c(10, 100, 1000, 10000, 100000)
 gener <- 100000
 retain <- 10000
 
-## nominal coverage of HPD set
+## nominal coverage and median area of HPD set
 prob <- 0.95
 ## repeat for each of the six scenarios
 for (i in 1:length(q1)){
   for (j in 1:length(samps)){
     ## repeat process 10000 times in parallel for each sample size and scenario combination
     set.seed(10000*j, kind = "L'Ecuyer-CMRG")
-    res_temp <- foreach(k=1:m, .packages=c('nleqslv', 'MASS', 'mvtnorm', 'copula'), .combine=rbind,
+    res_temp <- foreach(k=1:m, .packages=c('nleqslv', 'MASS', 'mvtnorm', 'copula', 'FNN', 'qrng'), .combine=rbind,
                         .options.snow=opts) %dopar% {
                           ## simulate covariates x1 and x2
                           temp = mvrnorm(n=samps[j], mu = c(0,0), Sigma = rbind(c(1, 0), c(0,1)))
@@ -461,13 +465,65 @@ for (i in 1:length(q1)){
                             levels <- sapply(prob, function(x) {
                               approx(c1, sz, xout = 1 - x)$y
                             })
-                            post_pt <- as.numeric(kde2d(var1, var2, n = n, h = h, lims = c(pt[1], pt[1], pt[2], pt[2]))$z)
+                            post_pt <- as.numeric(kde2d(var1, var2, n = 1, h = h, lims = c(pt[1], pt[1], pt[2], pt[2]))$z)
                             ifelse(post_pt >= levels, 1, 0)
+                          }
+                          
+                          ## helper function
+                          check_pt <- function(x, y, pt){
+                            as.numeric(kde2d(x, y, n = 1, lims = c(pt[1], pt[1], pt[2], pt[2]))$z)}
+                          
+                          ## function to get the area of the HPD set
+                          HDIvol <- function (x, vars = 1:2, h, n = 50, lump = TRUE, prob = 0.95, 
+                                              xlab = NULL, ylab = NULL, lims = NULL, pt, mm = 4096) 
+                          {
+                            parnames <- colnames(x)
+                            var1 <- x[, vars[1]]
+                            var2 <- x[, vars[2]]
+                            lims <- c(range(var1), range(var2))
+                            post1 <- kde2d(var1, var2, n = n, h = h, lims = lims)
+                            dx <- diff(post1$x[1:2])
+                            dy <- diff(post1$y[1:2])
+                            sz <- sort(post1$z)
+                            c1 <- cumsum(sz) * dx * dy
+                            levels <- sapply(prob, function(x) {
+                              approx(c1, sz, xout = 1 - x)$y
+                            })
+                            
+                            ## generate Sobol sequence from square that covers the
+                            ## HPD set
+                            sob <- sobol(mm, d = 2, randomize = "digital.shift")
+                            xs <- lims[1] + (lims[2] - lims[1])*sob[,1]
+                            ys <- lims[3] + (lims[4] - lims[3])*sob[,2]
+                            
+                            ## k nearest neighbours to make computation faster
+                            k <- knn(cbind(expand.grid(post1$x, post1$y)),
+                                     cbind(xs, ys),cl=1:(nrow(post1$z)^2),k=3)
+                            ## extract the three nearest neighbours from the grid
+                            ## of points used to find the 2D kernel density estimate
+                            ## for each point in the Sobol' sequence
+                            indices1 <- attr(k, "nn.index")
+                            
+                            temp <- matrix(post1$z, ncol = 1, byrow = TRUE)[indices1,]
+                            temp <- matrix(temp, byrow = FALSE, ncol = 3)
+                            check_flag <- apply(temp, 1, function(x, lev){sum(x > lev)}, lev = levels)
+                            
+                            ## we only check if the points from the Sobol' sequence are inside the
+                            ## HPD set if all of their three nearest neighbours are not inside or 
+                            ## outside the set (i.e., check_flag should be 1 or 2).
+                            ## if all 3 neighbours are inside the HPD set, we assume the Sobol' 
+                            ## sequence point is inside the set. If all 3 neighbours are outside,
+                            ## we assume the Sobol' sequence point is outside
+                            yes <- sum(apply(cbind(xs[which(check_flag %in% c(1,2))], 
+                                                   ys[which(check_flag %in% c(1,2))]), 1, check_pt, x = var1, y = var2) > levels)
+                            yes <- yes + length(which(check_flag == 3))
+                            yes/mm*(lims[2] - lims[1])*(lims[4] - lims[3])
                           }
                           
                           ## return binary indicator for coverage and the posterior correlation between beta1 and beta2
                           cover <- HDIbivar(data.frame(b1 = b1_post, b2 = b2_post), n = 60, prob = prob, pt = c(q1[i], q2[i]))[[1]]
-                          res_t <- c(cover, cor(b1_post, b2_post, method = "kendall"))
+                          vol <- HDIvol(data.frame(b1 = b1_post, b2 = b2_post), n = 60, prob = prob)
+                          res_t <- c(cover, vol, sd(b1_post), sd(b2_post), cor(b1_post, b2_post, method = "kendall"))
                           
                           ## first get proposal sample for independence copula
                           samp_t <- mvrnorm(gener, mu = modeind, Sigma = var_mat)
@@ -501,7 +557,8 @@ for (i in 1:length(q1)){
                           
                           ## get coverage and correlation for independence copula
                           cover <- HDIbivar(data.frame(b1 = b1_post, b2 = b2_post), n = 60, prob = prob, pt = c(q1[i], q2[i]))[[1]]
-                          res_ind <- c(cover, cor(b1_post, b2_post, method = "kendall"))
+                          vol <- HDIvol(data.frame(b1 = b1_post, b2 = b2_post), n = 60, prob = prob)
+                          res_ind <- c(cover, vol, sd(b1_post), sd(b2_post), cor(b1_post, b2_post, method = "kendall"))
                           
                           ## coverage and correlation results for both copulas
                           c(res_t, res_ind)
@@ -530,10 +587,37 @@ res <- NULL
 for (i in 1:6){
   res_temp <- NULL
   for (j in 1:length(samps)){
-    tt <- read.csv(paste0("coverage_", i,"_samps_", samps[j], ".csv"))[,1]
+    tt <- read.csv(paste0("coverage_", i,"_samps_", samps[j], ".csv"))[,6]
     res_temp <- c(res_temp, round(mean(tt),4))
   }
   res <- cbind(res, res_temp)
 }
 
 write.csv(res, "summary_ind_cov.csv", row.names = FALSE)
+
+## now get the volume numbers
+## process .csv files to get part of table for t-copula
+res <- NULL
+for (i in 1:6){
+  res_temp <- NULL
+  for (j in 1:length(samps)){
+    tt <- read.csv(paste0("coverage_", i,"_samps_", samps[j], ".csv"))[,2]
+    res_temp <- c(res_temp, round(median(tt),4))
+  }
+  res <- cbind(res, res_temp)
+}
+
+write.csv(res, "summary_t_vol.csv", row.names = FALSE)
+
+## process .csv files to get part of table for independence copula
+res <- NULL
+for (i in 1:6){
+  res_temp <- NULL
+  for (j in 1:length(samps)){
+    tt <- read.csv(paste0("coverage_", i,"_samps_", samps[j], ".csv"))[,7]
+    res_temp <- c(res_temp, round(median(tt),4))
+  }
+  res <- cbind(res, res_temp)
+}
+
+write.csv(res, "summary_ind_vol.csv", row.names = FALSE)
